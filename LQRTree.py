@@ -28,7 +28,7 @@ class LQRTree(Object):
 
 
 
-	def __init__(self, cost_fun, plant):
+	def __init__(self, cost_fun, plant, InputLimit):
 	"""
 	
 	There are going to be  a lot of parameters that get set here. 
@@ -48,7 +48,8 @@ class LQRTree(Object):
 	self.plant = plant 
 	self.context =  self.plant.CreateDefaultContext()
 	self.cost_fun = cost_fun
-
+	self.goal_point = goal_point 
+	self.InputLimit = InputLimit
 
 	def constructTree(): 
 	"""
@@ -94,6 +95,10 @@ class LQRTree(Object):
 	                                      dircol.input(0), dircol.input(1),
 	                                      dircol)
 
+	#Input Constraint 
+	u = dircol.input();
+	dircol.AddConstraintToAllKnotPoints(-self.InputLimit <= u(0));
+	dircol.AddConstraintToAllKnotPoints(u(0) <= self.InputLimit);
 
 
 	#Trajectory optimization requires an initial guess, even if it's not very good. 
@@ -107,13 +112,15 @@ class LQRTree(Object):
 
     dircol.AddRunningCost(self.cost_fun)
 
-
+    # Solve the trajectory optimization 
     result = mp.Solve(dircol)
 
 
+    #Retrieve the input and state trajectories 
     input_traj = dircol.ReconstructInputTrajectory(result=result)
-    
     state_traj = dircol.ReconstructStateTrajectory(result=result)
+
+    return [input_traj, state_traj]
 
 
 	def funnelConstruction(): 
