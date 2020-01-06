@@ -20,7 +20,7 @@ from pydrake.systems.framework import InputPortSelection
 from pydrake.systems.primitives import LinearSystem
 from pydrake.systems.trajectory_optimization import (
     AddDirectCollocationConstraint, DirectCollocation,
-    DirectCollocationConstraint, DirectTranscription,
+    DirectCollocationConstraint, 
     TimeStep,
 )
 
@@ -28,7 +28,7 @@ class LQRTree(Object):
 
 
 
-	def __init__(self):
+	def __init__(self, cost_fun, plant):
 	"""
 	
 	There are going to be  a lot of parameters that get set here. 
@@ -44,6 +44,10 @@ class LQRTree(Object):
 	goal_point: the goal of the LQR tree 
 
 	"""
+
+	self.plant = plant 
+	self.context =  self.plant.CreateDefaultContext()
+	self.cost_fun = cost_fun
 
 
 	def constructTree(): 
@@ -68,7 +72,48 @@ class LQRTree(Object):
 	Use trajectory optimization to connect a sampled point to a nearest neighbor on the tree. 
 	"""
 
+	# Setup direct collocation trajectory opitmization 
+	dircol = DirectCollocation(
+            self.plant, self.context, num_time_samples=21, minimum_timestep=0.2,
+            maximum_timestep=0.5,
+            input_port_index=InputPortSelection.kUseFirstInputIfItExists,
+            assume_non_continuous_states_are_fixed=False)
 
+	dircol.AddDurationBounds(lower_bound=0.5, upper_bound=3.0)
+	
+	#make start state equal to start point 
+	dircol.AddLinearConstraint(dircol.initial_state() == start_pt)
+	
+	#make end state equal to end pt 
+	dircol.AddLinearConstraint(dircol.final_state()   == end_pt)
+
+	#construct collocation constraints
+	constraint = DirectCollocationConstraint(plant, context)	
+	AddDirectCollocationConstraint(constraint, dircol.timestep(0),
+	                                      dircol.state(0), dircol.state(1),
+	                                      dircol.input(0), dircol.input(1),
+	                                      dircol)
+
+
+
+	#Trajectory optimization requires an initial guess, even if it's not very good. 
+    initial_u = PiecewisePolynomial.ZeroOrderHold([0, .3*21],
+                                                   np.zeros((1, 2)))
+    initial_x = PiecewisePolynomial()
+    
+    dircol.SetInitialTrajectory(traj_init_u=initial_u,
+                                    traj_init_x=initial_x)
+
+
+    dircol.AddRunningCost(self.cost_fun)
+
+
+    result = mp.Solve(dircol)
+
+
+    input_traj = dircol.ReconstructInputTrajectory(result=result)
+    
+    state_traj = dircol.ReconstructStateTrajectory(result=result)
 
 
 	def funnelConstruction(): 
