@@ -9,8 +9,8 @@ Last Updated: Jan 2020
 from pydrake.examples.pendulum import (PendulumPlant, PendulumState)
 import numpy as np 
 from LQRTree import LQRTree
-
-
+from util.utils import PendulumItem
+import collections
 
 
 def cost(x,u): 
@@ -31,4 +31,6 @@ if __name__ == '__main__':
 	goal_point=np.array([2,0]) # TODO: This doesn't seem right 
 	dt=.05
 	bounds=np.array([0,1])# TODO: This doesn't seem right 
-	tree=LQRTree(2,1,goal_point,dt,plant,bounds,bounds)
+	Point= PendulumItem
+	acceptableError = 180
+	tree=LQRTree(Point,1,goal_point,dt,plant,bounds,bounds,acceptableError )
