@@ -24,8 +24,12 @@ from pydrake.systems.trajectory_optimization import (
     TimeStep
 )
 import networkx as nx
-
+import scipy 
+import kdtree
+from util.utils import PendulumItem, LinearizationPoint
 from pydrake.systems.controllers import LinearQuadraticRegulator
+import collections
+
 
 class LQRTree(Object): 
 """
@@ -142,32 +146,47 @@ class LQRTree(Object):
     Determines the goal set, G, by approximating the invariant
     set of the closed-loop goal-state dynamics, see Sec. 5.3 of Reist
     """ 
-        epsH = np.inf 
+      epsH = np.inf 
+
+
+      termCond = np.ceil(np.log(event_probability)/np.log(success_probability))
+
+
+      # Construct LQR around goal point 
+      context_goal=self.plant.CreateDefaultContext()
+      context_goal.SetContinuousState(self.goal_point)#what's set discrete state
+      self.plant.get_input_port(0).FixValue(context_goal, 0)#if input port not set, it doesn't seem the taylor approx can run, the number of ports vary plants by plants
+      affine_sys_goal=FirstOrderTaylorApproximation(self.plant,context_goal)
+      K_goal,S_goal = LinearQuadraticRegulator(affine_sys_goal.A(), affine_sys_goal.B(), self.Q, self.R)
+
+      #Determine the eigenvalues and vectors of the value function matrix 
+      evalues, evectors = np.linalg.eig(S_goal)
+
 
 
         return epsH
 
-    def addNode(self, K, S, A, B, epsH, Vx, Qval, X0, T, U0)
+    def addNode(self, K, S, A, B, epsH, Vx, Qval, X0, T, U0, rebalance)
     """
     the following code add a node with index/label = node_cnt,
     along with attributes for this node, like K,S,epsH
     """
-        self.G.add_node(self.node_cnt,
-                        K=K,
-                        S=S,
-                        A=A,
-                        B=B,
-                        epsH=epsH,
-                        Vx=Vx, #TODO: Do we need to store Vx here?
-                        Qval=Qval, 
-                        X0=X0,
-                        T=T,
-                        U0=U0)
+
+        pt = LinearizationPoint( K, S, A, B, epsH, Vx, Qval, X0, T, U0)
+
+        self.G.add_node(self.node_cnt,pt)
         # always add 1 to node cnt when adding nodes
         self.node_cnt=self.node_cnt+1
 
+        self.kdTree.add(self.Point(X0, pt))
 
-    def __init__(self, state_dim, action_dim, cost_fun, plant, input_bounds, state_bounds, acceptable_error):
+
+        # might need to trigger this somewhere else if it's too slow 
+        if not self.kdTree.is_balanced and rebalance: 
+          self.kdtree.rebalance()
+
+
+    def __init__(self, point_factory, action_dim, cost_fun, plant, input_bounds, state_bounds, acceptable_error, event_probability, success_probability):
     """
     
     There are going to be  a lot of parameters that get set here. 
@@ -191,12 +210,16 @@ class LQRTree(Object):
     self.InputLimit = InputLimit
     self.acceptable_error = acceptable_error
 
-    self.nX=state_dim
+    self.nX=len(point_factory._fields)
     self.nU=action_dim
     self.plant = plant 
     self.context =  self.plant.CreateDefaultContext()
 
-    self.goal_point = goal_point 
+    self.event_probability = event_probability
+    self.success_probability = success_probability
+
+    self.Point = point_factory
+
     self.input_bounds=input_bounds
     self.state_bounds=state_bounds
     self.dt=dt
@@ -212,19 +235,25 @@ class LQRTree(Object):
     self.R=np.eye(nU)*5#5 is user defined
     self.nNodesInit = 10000
 
+    # Init Kd-tree 
+    self.kdtree = kdtree.create(dimensions=self.nX)
 
-    # Construct LQR around goal point 
-    context_goal=self.plant.CreateDefaultContext()
-    context_goal.SetContinuousState(self.goal_point)#what's set discrete state
-    self.plant.get_input_port(0).FixValue(context_goal, 0)#if input port not set, it doesn't seem the taylor approx can run, the number of ports vary plants by plants
-    affine_sys_goal=FirstOrderTaylorApproximation(self.plant,context_goal)
-    K_goal,S_goal = LinearQuadraticRegulator(affine_sys_goal.A(), affine_sys_goal.B(), self.Q, self.R)
+
+
     
     #Bound region around goal point 
     epsH = findGoalBasinSim()
 
     #Add Goal to 
-    addNode(K_goal[0], S_goal[0], affine_sys_goal.A(), affine_sys_goal.B(), epsH,0,0,self.goal_point, 0,0)
+    addNode(K_goal[0], S_goal[0], affine_sys_goal.A(), affine_sys_goal.B(), epsH,0,0,self.goal_point, 0,0, False)
+
+
+
+    def inBasin(self,x_sample): 
+
+      closest_pt=self.kdtree.search_nn(x_sample)
+
+
 
     def test_goal(self, x_sample):
     """
@@ -242,19 +271,20 @@ class LQRTree(Object):
         a funnel that we've already defined 
     """
 
-        inGoal = 
-            %check if sample is already in final basin:
-            [inGoal] = testGoal(xSample);
-            if(inGoal)
-                init = [];   % return empty motion planning init trajectory
-                flag = 3;    % if xSample in goal, return 3
-                return
-            end
-            
-            % initialize success state and test result flag
-            success = -1;   % needed in case all nodes whose funnels contain
-                            % the sample are tested (simAllNodes in options)
-            flag = -1;
+        #First check that the point is not contained in the goal 
+        inGoal = self.test_goal(x_sample)
+        if inGoal: 
+          init = [] 
+          flag = 3
+          return init, flag 
+
+        #initialize success state and test result flags 
+        success = -1 # it might be necessary to evaluate multiple funnels in the case of funnel overlap 
+        flag = -1 
+
+        #check if sample is within any funnel in the tree, and also get
+        #closest node to xSample in tree if it's not inside
+
             
             % check if sample is within any funnel in the tree, and also get
             % closest node to xSample in tree if it's not inside
